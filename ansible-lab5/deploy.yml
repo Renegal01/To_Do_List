@@ -1,0 +1,80 @@
+
+---
+- name: Доставка Docker-образа и развертывание Todo List
+  hosts: deploy
+  become: false
+
+  vars:
+    deploy_dir: /home/vboxuser/todo-list
+    local_image: "{{ playbook_dir }}/../todo-list-image.tar"
+    remote_image: "{{ deploy_dir }}/todo-list-image.tar"
+
+  tasks:
+    - name: Проверить наличие Docker-образа у Jenkins
+      ansible.builtin.stat:
+        path: "{{ local_image }}"
+      delegate_to: localhost
+      register: image_file
+
+    - name: Убедиться, что Docker-образ существует
+      ansible.builtin.assert:
+        that:
+          - image_file.stat.exists
+        fail_msg: "Не найден архив Docker-образа"
+
+    - name: Создать каталог приложения на сервере
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Передать готовый Docker-образ на сервер
+      ansible.builtin.copy:
+        src: "{{ local_image }}"
+        dest: "{{ remote_image }}"
+        mode: "0644"
+
+    - name: Передать Docker Compose конфигурацию
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/docker-compose.deploy.yml"
+        dest: "{{ deploy_dir }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Загрузить Docker-образ
+      ansible.builtin.command:
+        cmd: docker load -i "{{ remote_image }}"
+
+    - name: Запустить приложение и PostgreSQL
+      ansible.builtin.command:
+        cmd: docker compose -p todo-lab5 up -d --no-build
+        chdir: "{{ deploy_dir }}"
+
+    - name: Проверить доступность приложения
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/health
+        method: GET
+        status_code: 200
+      register: health_result
+      retries: 30
+      delay: 3
+      until: health_result.status | default(0) == 200
+
+    - name: Показать контейнеры
+      ansible.builtin.command:
+        cmd: docker compose -p todo-lab5 ps
+        chdir: "{{ deploy_dir }}"
+      register: containers
+      changed_when: false
+
+    - name: Вывести состояние контейнеров
+      ansible.builtin.debug:
+        var: containers.stdout_lines
+
+    - name: Сообщить об успешном развертывании
+      ansible.builtin.debug:
+        msg: "Todo List развернут на Deploy-Server!"
+
+    - name: Удалить переданный архив после загрузки
+      ansible.builtin.file:
+        path: "{{ remote_image }}"
+        state: absent
