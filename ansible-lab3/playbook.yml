@@ -1,0 +1,114 @@
+
+---
+- name: Развертывание Todo List на Ubuntu Server
+  hosts: servers
+  become: true
+
+  vars:
+    project_dir: /mnt/c/Users/Danil/Downloads/To_Do_List-main
+    deploy_dir: /opt/todo-list
+
+  tasks:
+    - name: Обновить список пакетов
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Установить Docker и Docker Compose
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+
+    - name: Запустить Docker и включить автозапуск
+      ansible.builtin.systemd_service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Создать каталог приложения
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}/backend"
+        state: directory
+        owner: danil
+        group: danil
+        mode: "0755"
+
+    - name: Доставить файлы веб-интерфейса и Docker
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/{{ item }}"
+        dest: "{{ deploy_dir }}/{{ item }}"
+        owner: danil
+        group: danil
+        mode: "0644"
+      loop:
+        - index.html
+        - index.js
+        - style.css
+        - Dockerfile
+        - .dockerignore
+        - docker-compose.yml
+
+    - name: Доставить основные файлы backend
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/backend/{{ item }}"
+        dest: "{{ deploy_dir }}/backend/{{ item }}"
+        owner: danil
+        group: danil
+        mode: "0644"
+      loop:
+        - package.json
+        - package-lock.json
+        - server.js
+
+    - name: Доставить каталоги backend
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/backend/{{ item }}/"
+        dest: "{{ deploy_dir }}/backend/{{ item }}/"
+        owner: danil
+        group: danil
+        directory_mode: "0755"
+      loop:
+        - config
+        - controllers
+        - migrations
+        - models
+        - routes
+        - swagger
+
+    - name: Собрать и запустить контейнеры
+      ansible.builtin.command:
+        cmd: docker compose up --build -d
+        chdir: "{{ deploy_dir }}"
+      register: compose_result
+      changed_when: >
+        'Created' in compose_result.stderr or
+        'Started' in compose_result.stderr or
+        'Recreated' in compose_result.stderr or
+        'Built' in compose_result.stderr
+
+    - name: Дождаться запуска веб-приложения
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/health
+        method: GET
+        status_code: 200
+      register: health_result
+      retries: 30
+      delay: 5
+      until: health_result.status == 200
+
+    - name: Получить состояние контейнеров
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ deploy_dir }}"
+      register: containers_result
+      changed_when: false
+
+    - name: Показать состояние контейнеров
+      ansible.builtin.debug:
+        var: containers_result.stdout_lines
+
+    - name: Сообщить об успешном развертывании
+      ansible.builtin.debug:
+        msg: "Todo List успешно развернут на сервере!"
